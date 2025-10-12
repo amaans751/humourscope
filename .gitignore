@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Env
+.env
+
+# Streamlit cache
+.streamlit/
+
+# Data & artifacts
+data/cache/
+data/exports/
+data/*.parquet
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

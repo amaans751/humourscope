@@ -1,0 +1,49 @@
+[tool.poetry]
+name = "humourscope"
+version = "0.1.0"
+description = "Reddit humour norms explorer"
+readme = "README.md"
+license = "MIT"
+authors = ["Mohammed Amaan Shaikh amaans751@gmail.com"]
+packages = [{ include = "humourscope", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.12"
+streamlit = "^1.37.0"
+praw = "^7.8.0"
+pandas = "^2.2.0"
+numpy = "^1.26.0"
+scikit-learn = "^1.5.0"
+plotly = "^5.24.0"
+python-dotenv = "^1.0.0"
+tqdm = "^4.66.0"
+sentence-transformers = "^3.0.0"
+bertopic = "^0.16.0"
+umap-learn = "^0.5.0"
+hdbscan = "^0.8.0"
+spacy = "^3.7.0"
+transformers = "^4.44.0"
+rich = "^13.7.0"
+pydantic = "^2.8.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.10.0"
+isort = "^5.13.2"
+flake8 = "^7.1.1"
+mypy = "^1.11.2"
+pre-commit = "^3.8.0"
+pytest = "^8.3.2"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,30 @@
+[project]
+name = "hmorscope"
+version = ".1."
+description = "Reddit hmor norms explorer"
+readme = "README.md"
+license = { text = "MIT" }
+reqires-python = ">=3.11,<3.1"
+athors = [{ name = "Amaan Shaikh" }]
+
+dependencies = [
+  "streamlit>=1.37",
+  "praw>=7.8",
+  "pandas>=.",
+  "nmpy>=1.6",
+  "scikit-learn>=1.5",
+  "python-dotenv>=1.",
+  "tqdm>=4.66"
+]
+
+[tool.poetry]
+# keep only the src/ mapping here; Poetry  is fine with this
+packages = [{ inclde = "hmorscope", from = "src" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[ild-system]
+reqires = ["poetry-core>=..,<3.."]
+ild-ackend = "poetry.core.masonry.api"
