@@ -5,9 +5,6 @@ import os
 import re
 from pathlib import Path
 from typing import List
-import plotly.io as pio
-pio.renderers.default = "browser"
-
 
 import pandas as pd
 import plotly.express as px
@@ -22,7 +19,8 @@ st.set_page_config(
 )
 
 # ---- Custom Styling (modern look) ----
-st.markdown("""
+st.markdown(
+    """
     <style>
         /* Global */
         body, .stApp {
@@ -91,31 +89,30 @@ st.markdown("""
             color: #f8fafc;
         }
     </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
- # ---- Header ----
-st.markdown("""
+# ---- Header ----
+st.markdown(
+    """
     <div class="title-container">
         <h1>😂 HumourScope Reddit Humour Norms</h1>
         <p class="info-text">Explore humour, sentiment, and tone across Reddit communities</p>
     </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # ---- Sidebar ----
 st.sidebar.markdown("### 🎛️ Inputs")
 subs = st.sidebar.text_input(
-    "Enter Subreddits (comma-separated):",
-    "funny, antimemes, ProgrammerHumor"
+    "Enter Subreddits (comma-separated):", "funny, antimemes, ProgrammerHumor"
 )
 window = st.sidebar.selectbox(
-    "Select Time Window (ignored in Demo):",
-    ["day", "week", "month", "year"],
-    index=2
+    "Select Time Window (ignored in Demo):", ["day", "week", "month", "year"], index=2
 )
-limit_posts = st.sidebar.slider(
-    "Top posts per subreddit (ignored in Demo):",
-    20, 200, 80, step=20
-)
+limit_posts = st.sidebar.slider("Top posts per subreddit (ignored in Demo):", 20, 200, 80, step=20)
 demo_mode = st.sidebar.toggle("🧪 Demo mode (no Reddit API)", value=True)
 run = st.sidebar.button("🚀 Fetch & Analyse", use_container_width=True)
 
@@ -240,9 +237,10 @@ def try_hf_humor_probs(texts: List[str]) -> pd.Series:
         probs = []
         with torch.inference_mode():
             for i in range(0, len(texts), 16):
-                batch = texts[i:i+16]
-                enc = tok(batch, padding=True, truncation=True,
-                          max_length=256, return_tensors="pt").to(device)
+                batch = texts[i : i + 16]
+                enc = tok(
+                    batch, padding=True, truncation=True, max_length=256, return_tensors="pt"
+                ).to(device)
                 logits = mdl(**enc).logits
                 pos_p = torch.softmax(logits, dim=1)[:, 1].cpu().tolist()  # 1 = positive
                 probs.extend(pos_p)
@@ -252,11 +250,11 @@ def try_hf_humor_probs(texts: List[str]) -> pd.Series:
 
     except Exception as e:
         import traceback
+
         st.error(f"HF model failed with: {repr(e)}")
         st.code(traceback.format_exc())
         st.info("Falling back to lightweight humour heuristic.")
         return lightweight_humor_score(texts)
-
 
 
 def safe_bertopic(texts: List[str]) -> pd.DataFrame:
