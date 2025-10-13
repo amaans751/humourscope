@@ -5,6 +5,9 @@ import os
 import re
 from pathlib import Path
 from typing import List
+import plotly.io as pio
+pio.renderers.default = "browser"
+
 
 import pandas as pd
 import plotly.express as px
@@ -12,17 +15,110 @@ import streamlit as st
 
 # ---------------- UI & Page Setup ----------------
 
-st.set_page_config(page_title="HumourScope", layout="wide")
-st.title("HumourScope — Reddit Humour Norms")
-
-st.sidebar.header("Inputs")
-subs = st.sidebar.text_input("Subreddits (comma-separated)", "funny, antimemes, ProgrammerHumor")
-window = st.sidebar.selectbox(
-    "Time window (ignored in Demo)", ["day", "week", "month", "year"], index=2
+st.set_page_config(
+    page_title="HumourScope Reddit Humour Norms",
+    layout="wide",
+    page_icon="😂",
 )
-limit_posts = st.sidebar.slider("Top posts per subreddit (ignored in Demo)", 20, 200, 80, step=20)
-demo_mode = st.sidebar.toggle("Demo mode (no Reddit API)", value=True)
-run = st.sidebar.button("Fetch & Analyse")
+
+# ---- Custom Styling (modern look) ----
+st.markdown("""
+    <style>
+        /* Global */
+        body, .stApp {
+            background-color: #f9fafb;
+            font-family: "Inter", sans-serif;
+        }
+
+        /* Title banner */
+        .title-container {
+            background: linear-gradient(90deg, #6366f1 0%, #3b82f6 100%);
+            color: white;
+            padding: 1.2rem 2rem;
+            border-radius: 12px;
+            text-align: center;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        }
+
+        /* Sidebar styling */
+        section[data-testid="stSidebar"] {
+            background-color: #f1f5f9 !important;
+        }
+        .stSidebar > div > div {
+            padding: 1rem 1.4rem;
+        }
+
+        /* Headings */
+        h1, h2, h3, h4, h5 {
+            font-weight: 600 !important;
+            color: #111827;
+        }
+
+        /* Info text */
+        .info-text {
+            color: #4b5563;
+            font-size: 0.95rem;
+            margin-top: -6px;
+        }
+
+        /* Cards (charts & tables) */
+        .stPlotlyChart, .stDataFrame {
+            background-color: white;
+            border-radius: 10px;
+            padding: 0.8rem;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+        }
+
+        /* Sidebar labels */
+        .sidebar-label {
+            font-weight: 600;
+            color: #1e293b;
+            margin-top: 1rem;
+        }
+
+        /* Buttons */
+        div[data-testid="stButton"] > button {
+            background: linear-gradient(90deg, #4f46e5, #3b82f6);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            padding: 0.6rem 1rem;
+        }
+        div[data-testid="stButton"] > button:hover {
+            background: linear-gradient(90deg, #4338ca, #2563eb);
+            color: #f8fafc;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+ # ---- Header ----
+st.markdown("""
+    <div class="title-container">
+        <h1>😂 HumourScope Reddit Humour Norms</h1>
+        <p class="info-text">Explore humour, sentiment, and tone across Reddit communities</p>
+    </div>
+""", unsafe_allow_html=True)
+
+# ---- Sidebar ----
+st.sidebar.markdown("### 🎛️ Inputs")
+subs = st.sidebar.text_input(
+    "Enter Subreddits (comma-separated):",
+    "funny, antimemes, ProgrammerHumor"
+)
+window = st.sidebar.selectbox(
+    "Select Time Window (ignored in Demo):",
+    ["day", "week", "month", "year"],
+    index=2
+)
+limit_posts = st.sidebar.slider(
+    "Top posts per subreddit (ignored in Demo):",
+    20, 200, 80, step=20
+)
+demo_mode = st.sidebar.toggle("🧪 Demo mode (no Reddit API)", value=True)
+run = st.sidebar.button("🚀 Fetch & Analyse", use_container_width=True)
+
 
 # ---------------- Utilities ----------------
 
@@ -116,7 +212,7 @@ def lightweight_humor_score(texts: List[str]) -> pd.Series:
     scores = []
     for t in texts:
         t2 = t.lower()
-        s = 0.0
+        s = 0.05 + (len(t) % 10) * 0.01
         s += 0.12 if ("lol" in t2 or "lmao" in t2 or "rofl" in t2) else 0.0
         s += 0.10 * t.count("!")
         s += 0.08 if ("😂" in t or "😅" in t or "🤣" in t) else 0.0
@@ -129,35 +225,38 @@ def lightweight_humor_score(texts: List[str]) -> pd.Series:
 
 
 def try_hf_humor_probs(texts: List[str]) -> pd.Series:
-    """Try HF model; fallback to lightweight heuristic on any failure."""
+    """Use open public sentiment model (positive ≈ humour) with fallback heuristic."""
     try:
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        tok = AutoTokenizer.from_pretrained("Humor-Research/humor-detection-comb-23")
-        mdl = AutoModelForSequenceClassification.from_pretrained(
-            "Humor-Research/humor-detection-comb-23"
-        ).to(device)
+        device = torch.device("cpu")  # works reliably on macOS
+        model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+
+        tok = AutoTokenizer.from_pretrained(model_name)
+        mdl = AutoModelForSequenceClassification.from_pretrained(model_name).to(device)
         mdl.eval()
+
         probs = []
         with torch.inference_mode():
             for i in range(0, len(texts), 16):
-                batch = texts[i : i + 16]
-                enc = tok(
-                    batch,
-                    padding=True,
-                    truncation=True,
-                    max_length=256,
-                    return_tensors="pt",
-                ).to(device)
+                batch = texts[i:i+16]
+                enc = tok(batch, padding=True, truncation=True,
+                          max_length=256, return_tensors="pt").to(device)
                 logits = mdl(**enc).logits
-                p = logits.softmax(dim=1)[:, 1].detach().cpu().tolist()
-                probs.extend(p)
+                pos_p = torch.softmax(logits, dim=1)[:, 1].cpu().tolist()  # 1 = positive
+                probs.extend(pos_p)
+
+        st.success(" Hugging Face model loaded successfully on CPU")
         return pd.Series(probs)
+
     except Exception as e:
-        st.info(f"Using lightweight humour heuristic (HF model unavailable: {e})")
+        import traceback
+        st.error(f"HF model failed with: {repr(e)}")
+        st.code(traceback.format_exc())
+        st.info("Falling back to lightweight humour heuristic.")
         return lightweight_humor_score(texts)
+
 
 
 def safe_bertopic(texts: List[str]) -> pd.DataFrame:
