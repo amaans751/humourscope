@@ -1,7 +1,8 @@
 # streamlit_app.py
-# HumourScope — Reddit Humour Norms (Demo-ready)
+# HumourScope — Reddit Humour Norms (real data only)
 
-import os
+from __future__ import annotations
+
 import re
 from pathlib import Path
 from typing import List
@@ -10,7 +11,11 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# ---------------- UI & Page Setup ----------------
+# Project helpers
+from humourscope.data_loader import load_from_file, load_hf_sample
+from humourscope.lexicon import EN_STOP, TOKEN_RE, extract_entities, tokenize_meaningful
+
+# ====================== Page & CSS ======================
 
 st.set_page_config(
     page_title="HumourScope Reddit Humour Norms",
@@ -18,132 +23,87 @@ st.set_page_config(
     page_icon="😂",
 )
 
-# ---- Custom Styling (modern look) ----
 st.markdown(
     """
-    <style>
-        /* Global */
-        body, .stApp {
-            background-color: #f9fafb;
-            font-family: "Inter", sans-serif;
-        }
+<style>
+  /* Hide Streamlit header/toolbar and reduce padding */
+  header[data-testid="stHeader"] { display: none; }
+  div[data-testid="stToolbar"] { display: none; }
+  .block-container { padding-top: 1rem; }
 
-        /* Title banner */
-        .title-container {
-            background: linear-gradient(90deg, #6366f1 0%, #3b82f6 100%);
-            color: white;
-            padding: 1.2rem 2rem;
-            border-radius: 12px;
-            text-align: center;
-            margin-bottom: 2rem;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        }
-
-        /* Sidebar styling */
-        section[data-testid="stSidebar"] {
-            background-color: #f1f5f9 !important;
-        }
-        .stSidebar > div > div {
-            padding: 1rem 1.4rem;
-        }
-
-        /* Headings */
-        h1, h2, h3, h4, h5 {
-            font-weight: 600 !important;
-            color: #111827;
-        }
-
-        /* Info text */
-        .info-text {
-            color: #4b5563;
-            font-size: 0.95rem;
-            margin-top: -6px;
-        }
-
-        /* Cards (charts & tables) */
-        .stPlotlyChart, .stDataFrame {
-            background-color: white;
-            border-radius: 10px;
-            padding: 0.8rem;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-        }
-
-        /* Sidebar labels */
-        .sidebar-label {
-            font-weight: 600;
-            color: #1e293b;
-            margin-top: 1rem;
-        }
-
-        /* Buttons */
-        div[data-testid="stButton"] > button {
-            background: linear-gradient(90deg, #4f46e5, #3b82f6);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            padding: 0.6rem 1rem;
-        }
-        div[data-testid="stButton"] > button:hover {
-            background: linear-gradient(90deg, #4338ca, #2563eb);
-            color: #f8fafc;
-        }
-    </style>
+  /* Dark palette polish */
+  body, .stApp { background-color: #0f172a; color: #e5e7eb; }
+  section[data-testid="stSidebar"] { background: #111827; }
+  .stPlotlyChart, .stDataFrame { background: #111827; border-radius: 10px; }
+</style>
 """,
     unsafe_allow_html=True,
 )
 
-# ---- Header ----
 st.markdown(
     """
-    <div class="title-container">
-        <h1>😂 HumourScope Reddit Humour Norms</h1>
-        <p class="info-text">Explore humour, sentiment, and tone across Reddit communities</p>
-    </div>
+<h1>😂 HumourScope — Reddit Humour Norms</h1>
+<p>Explore humour, sentiment, and tone across Reddit communities</p>
 """,
     unsafe_allow_html=True,
 )
 
-# ---- Sidebar ----
-st.sidebar.markdown("### 🎛️ Inputs")
+# ====================== Sidebar ======================
+
+st.sidebar.header("Inputs")
+
 subs = st.sidebar.text_input(
-    "Enter Subreddits (comma-separated):", "funny, antimemes, ProgrammerHumor"
+    "Filter by Subreddits (comma-separated; optional)",
+    "funny, antimemes, ProgrammerHumor",
 )
-window = st.sidebar.selectbox(
-    "Select Time Window (ignored in Demo):", ["day", "week", "month", "year"], index=2
+
+data_source = st.sidebar.selectbox(
+    "Data source",
+    ["Hugging Face (public dataset)", "Local file (CSV/Parquet; Pushshift export)"],
 )
-limit_posts = st.sidebar.slider("Top posts per subreddit (ignored in Demo):", 20, 200, 80, step=20)
-demo_mode = st.sidebar.toggle("🧪 Demo mode (no Reddit API)", value=True)
-run = st.sidebar.button("🚀 Fetch & Analyse", use_container_width=True)
 
+# HF options
+hf_dataset = "SocialGrep/one-million-reddit-jokes"
+hf_n = 5000
+if data_source == "Hugging Face (public dataset)":
+    st.sidebar.caption("Dataset: SocialGrep/one-million-reddit-jokes (mostly r/Jokes)")
+    hf_n = st.sidebar.slider("Rows to load", 1000, 30000, 5000, step=1000)
 
-# ---------------- Utilities ----------------
+# Local file options
+uploaded = None
+local_path = ""
+if data_source == "Local file (CSV/Parquet; Pushshift export)":
+    uploaded = st.sidebar.file_uploader("Upload CSV/Parquet", type=["csv", "parquet"])
+    local_path = st.sidebar.text_input(
+        "…or path on disk",
+        "data/exports/reddit_2025-08_funny_antimemes_ProgrammerHumor.parquet",
+    )
 
+run = st.sidebar.button("Fetch & Analyse")
 
-def have_creds() -> bool:
-    """Detect if Reddit creds are present via env or Streamlit secrets."""
-    if os.getenv("REDDIT_CLIENT_ID") and os.getenv("REDDIT_CLIENT_SECRET"):
-        return True
-    try:
-        _ = st.secrets["REDDIT_CLIENT_ID"]
-        _ = st.secrets["REDDIT_CLIENT_SECRET"]
-        return True
-    except Exception:
-        return False
-
+# ====================== Cleaning ======================
 
 URL_RE = re.compile(r"https?://\S+")
 USER_RE = re.compile(r"\bu/\w+")
 SUB_RE = re.compile(r"\br/\w+")
 WS_RE = re.compile(r"\s+")
+BOILER_RE = re.compile(
+    r"(i am a bot|action (?:was )?performed automatically|"
+    r"contact (?:the )?moderators(?: of this subreddit)?|"
+    r"message (?:the )?moderators|"
+    r"www\.reddit\.com|reddit\.com|wiki|rules)",
+    re.I,
+)
 
 
 def clean_text(s: str) -> str:
-    s = (s or "").lower()
+    s = s or ""
     s = URL_RE.sub(" ", s)
+    s = BOILER_RE.sub(" ", s)
     s = USER_RE.sub(" ", s)
     s = SUB_RE.sub(" ", s)
-    s = re.sub(r"[^\w\s!?.,;:()\-]", " ", s)
+    s = s.lower()
+    s = re.sub(r"[^\w\s!?.,;:()\-']", " ", s)
     s = WS_RE.sub(" ", s).strip()
     return s
 
@@ -152,167 +112,120 @@ def clean_text_series(col: pd.Series) -> pd.Series:
     return col.fillna("").map(clean_text)
 
 
-def synthetic_demo_df(rows: int = 240) -> pd.DataFrame:
-    """Generate a small but varied dataset so charts have signal."""
-    examples = [
-        (
-            "funny",
-            "I told my computer I needed a break; it said No problem, I'll crash.",
-            77,
-        ),
-        ("funny", "My boss told me to have a good day, so I went home.", 64),
-        ("antimemes", "This is not a meme. It's an anti-meme.", 23),
-        ("antimemes", "A picture of nothing. Title: nothing. Comments: nothing.", 12),
-        (
-            "ProgrammerHumor",
-            "Unit tests pass on Friday; prod deploy fails on Monday 😅",
-            85,
-        ),
-        ("ProgrammerHumor", "printf('hello world'); // works in prod!", 48),
-    ]
-    data = []
-    for i in range(rows):
-        sub, txt, ups = examples[i % len(examples)]
-        ups2 = max(0, int(ups * (0.8 + (i % 7) * 0.05)))
-        t = txt
-        if i % 5 == 0:
-            t += " 😂"
-        if i % 6 == 0:
-            t = t.replace(".", "!").replace("'", "")
-        data.append(
-            {
-                "subreddit": sub,
-                "post_id": f"p{i//10}",
-                "post_title": f"Demo post {i//10} in r/{sub}",
-                "post_ups": ups2 + 5,
-                "created_utc": 1_700_000_000 + i * 60,
-                "comment_id": f"c{i}",
-                "text": t,
-                "comment_ups": ups2,
-                "is_submitter": False,
-                "parent_id": f"t1_{i-1}" if i else "t3_root",
-                "depth": 0 if i % 9 else 1,
-                "permalink": f"https://reddit.com/r/{sub}/comments/demo/{i}",
-            }
-        )
-    df = pd.DataFrame(data)
-    df["text_clean"] = clean_text_series(df["text"])
-    return df
+# ====================== Scoring & Topics ======================
 
 
 def lightweight_humor_score(texts: List[str]) -> pd.Series:
-    """
-    Tiny, fast heuristic so demo works without HF/torch.
-    Signals: emojis, exclamation, 'lol', 'lmao', programmer & anti-meme cues.
-    Outputs ~probabilities in [0.05, 0.95].
-    """
+    """Fast heuristic if transformers are unavailable."""
     scores = []
     for t in texts:
-        t2 = t.lower()
-        s = 0.05 + (len(t) % 10) * 0.01
-        s += 0.12 if ("lol" in t2 or "lmao" in t2 or "rofl" in t2) else 0.0
-        s += 0.10 * t.count("!")
-        s += 0.08 if ("😂" in t or "😅" in t or "🤣" in t) else 0.0
-        s += 0.08 if "i told my computer" in t2 else 0.0
-        s += 0.06 if ("anti-meme" in t2 or "anti meme" in t2) else 0.0
-        s += 0.06 if ("printf" in t2 or "console.log" in t2) else 0.0
-        s += 0.04 if ("boss" in t2 and "day" in t2) else 0.0
+        t2 = t.lower() if isinstance(t, str) else ""
+        s = 0.05 + (len(t2) % 10) * 0.01
+        if any(k in t2 for k in ("lol", "lmao", "rofl")):
+            s += 0.12
+        s += 0.10 * t2.count("!")
+        if any(e in t2 for e in ("😂", "😅", "🤣")):
+            s += 0.08
+        if any(k in t2 for k in ("printf", "console.log")):
+            s += 0.06
         scores.append(max(0.05, min(0.95, s)))
     return pd.Series(scores)
 
 
 def try_hf_humor_probs(texts: List[str]) -> pd.Series:
-    """Use open public sentiment model (positive ≈ humour) with fallback heuristic."""
+    """
+    Use a public sentiment model (positive ≈ humour proxy).
+    Falls back to a heuristic if transformers/weights unavailable.
+    """
     try:
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        device = torch.device("cpu")  # works reliably on macOS
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-
         tok = AutoTokenizer.from_pretrained(model_name)
-        mdl = AutoModelForSequenceClassification.from_pretrained(model_name).to(device)
+        mdl = AutoModelForSequenceClassification.from_pretrained(model_name)
         mdl.eval()
 
-        probs = []
+        probs: list[float] = []
         with torch.inference_mode():
             for i in range(0, len(texts), 16):
-                batch = texts[i : i + 16]
+                batch = [t if isinstance(t, str) else "" for t in texts[i : i + 16]]
                 enc = tok(
-                    batch, padding=True, truncation=True, max_length=256, return_tensors="pt"
-                ).to(device)
+                    batch,
+                    padding=True,
+                    truncation=True,
+                    max_length=256,
+                    return_tensors="pt",
+                )
                 logits = mdl(**enc).logits
-                pos_p = torch.softmax(logits, dim=1)[:, 1].cpu().tolist()  # 1 = positive
+                pos_p = logits.softmax(dim=1)[:, 1].cpu().tolist()
                 probs.extend(pos_p)
-
-        st.success(" Hugging Face model loaded successfully on CPU")
         return pd.Series(probs)
-
-    except Exception as e:
-        import traceback
-
-        st.error(f"HF model failed with: {repr(e)}")
-        st.code(traceback.format_exc())
-        st.info("Falling back to lightweight humour heuristic.")
+    except Exception:
         return lightweight_humor_score(texts)
 
 
 def safe_bertopic(texts: List[str]) -> pd.DataFrame:
-    """Try BERTopic; fallback to frequent phrase counts."""
+    """Try BERTopic; otherwise n-gram frequencies with strong stopwording."""
+    # --- sanitize input ---
+    texts = [t for t in texts if isinstance(t, str)]
+    texts = [t.strip() for t in texts if t and t.strip()]
+    if len(texts) < 20:
+        st.info("Not enough text for topic extraction yet.")
+        return pd.DataFrame({"Top terms": [], "Docs": []})
+
     try:
+        # ---- Primary: BERTopic ----
         from bertopic import BERTopic
         from sentence_transformers import SentenceTransformer
         from sklearn.feature_extraction.text import CountVectorizer
 
         sample = texts[:1500] if len(texts) > 1500 else texts
         emb = SentenceTransformer("all-MiniLM-L6-v2")
+
+        # light vectorizer for topic labels
         vec = CountVectorizer(ngram_range=(1, 2), stop_words="english", min_df=5)
-        topic_model = BERTopic(vectorizer_model=vec, calculate_probabilities=False, verbose=False)
-        topics, _ = topic_model.fit_transform(
+        topic_model = BERTopic(
+            vectorizer_model=vec,
+            calculate_probabilities=False,
+            verbose=False,
+        )
+        _topics, _ = topic_model.fit_transform(
             sample,
             emb.encode(sample, normalize_embeddings=True, show_progress_bar=False),
         )
-        info = topic_model.get_topic_info()
-        info = info.rename(columns={"Name": "Top terms", "Count": "Docs"})
+        info = topic_model.get_topic_info().rename(columns={"Name": "Top terms", "Count": "Docs"})
         return info.sort_values("Docs", ascending=False)
-    except Exception as e:
-        from sklearn.feature_extraction.text import CountVectorizer
 
-        vec = CountVectorizer(ngram_range=(2, 3), stop_words="english", min_df=3)
-        X = vec.fit_transform(texts)
-        freqs = X.sum(axis=0).A1
-        vocab = vec.get_feature_names_out()
-        df = pd.DataFrame({"Top terms": vocab, "Docs": freqs}).sort_values("Docs", ascending=False)
-        st.info(f"BERTopic unavailable, showing frequent phrases instead ({e})")
-        return df.head(20)
-
-
-def safe_entities(texts: List[str]) -> pd.DataFrame:
-    """Try spaCy NER; fallback to empty on failure (with notice)."""
-    try:
-        import spacy
-
+    except Exception:
+        # ---- Fallback: frequent phrases (2–3grams) with strong stop-wording ----
         try:
-            nlp = spacy.load("en_core_web_sm")
-        except OSError:
-            os.system("python -m spacy download en_core_web_sm >/dev/null 2>&1")
-            nlp = spacy.load("en_core_web_sm")
-        rows = []
-        for t in texts[:1500]:
-            doc = nlp(t)
-            for ent in doc.ents:
-                rows.append((ent.text, ent.label_))
-        df = pd.DataFrame(rows, columns=["entity", "label"])
-        if df.empty:
-            return pd.DataFrame(columns=["entity", "label", "count"])
-        return (
-            df.value_counts(["entity", "label"])
-            .reset_index(name="count")
-            .sort_values("count", ascending=False)
-        )
-    except Exception as e:
-        st.info(f"spaCy NER unavailable, skipping entities ({e})")
-        return pd.DataFrame(columns=["entity", "label", "count"])
+            from sklearn.feature_extraction.text import CountVectorizer
+
+            vec = CountVectorizer(
+                ngram_range=(2, 3),
+                stop_words=list(EN_STOP),
+                token_pattern=TOKEN_RE.pattern,
+                min_df=5,
+                max_df=0.30,  # trim overly common phrases
+            )
+            X = vec.fit_transform(texts)
+            if X.shape[1] == 0:
+                st.info("No salient phrases (empty vocabulary).")
+                return pd.DataFrame({"Top terms": [], "Docs": []})
+
+            freqs = X.sum(axis=0).A1
+            vocab = vec.get_feature_names_out()
+            out = (
+                pd.DataFrame({"Top terms": vocab, "Docs": freqs})
+                .sort_values("Docs", ascending=False)
+                .head(20)
+            )
+            return out
+
+        except Exception as e2:
+            st.info(f"Topic fallback unavailable: {e2}")
+            return pd.DataFrame({"Top terms": [], "Docs": []})
 
 
 def humour_mix_plot(df: pd.DataFrame):
@@ -326,38 +239,70 @@ def humour_mix_plot(df: pd.DataFrame):
     )
 
 
-# ---------------- Main Run Block ----------------
-
+# ====================== Main ======================
+CFG = {"displaylogo": False, "responsive": True}
 if run:
     sub_list = [s.strip() for s in subs.split(",") if s.strip()]
 
-    if demo_mode or not have_creds():
-        st.warning("Running in **Demo mode** (no Reddit API creds). Using a synthetic sample.")
-        df = synthetic_demo_df(rows=300)
+    # Load real data per source
+    if data_source == "Hugging Face (public dataset)":
+        with st.spinner(f"Loading HF dataset: {hf_dataset} ..."):
+            df = load_hf_sample(dataset=hf_dataset, split="train", n=hf_n)
+            st.success(f"Loaded {len(df):,} rows from HF dataset")
+
+    elif data_source == "Local file (CSV/Parquet; Pushshift export)":
+        if uploaded is not None:
+            tmpdir = Path("data/uploads")
+            tmpdir.mkdir(parents=True, exist_ok=True)
+            tmp_path = tmpdir / uploaded.name
+            with open(tmp_path, "wb") as f:
+                f.write(uploaded.read())
+            path = tmp_path
+        else:
+            path = Path(local_path)
+
+        with st.spinner(f"Loading file: {path} ..."):
+            if not path.exists():
+                st.error(f"File not found: {path}")
+                st.stop()
+            df = load_from_file(path)
+            st.success(f"Loaded {len(df):,} rows from {path.name}")
+
     else:
-        # Live mode: use your ingestion module
-        from src.humourscope.ingest import fetch_comments  # type: ignore
-        from src.humourscope.preprocess import clean_text as clean_text_fn  # type: ignore
+        st.error("Unknown data source")
+        st.stop()
 
-        with st.spinner("Fetching comments…"):
-            frames = [fetch_comments(s, limit_posts=limit_posts, lookback=window) for s in sub_list]
-            df = pd.concat(frames, ignore_index=True)
-            df = df.rename(columns={"comment_body": "text"})
-            df["text_clean"] = df["text"].fillna("").map(clean_text_fn)
+    # Optional subreddit filter (non-destructive)
+    if sub_list:
+        if "subreddit" in df.columns and df["subreddit"].notna().any():
+            filtered = df[df["subreddit"].astype(str).isin(sub_list)]
+            if filtered.empty:
+                st.warning("No rows match those subreddits in this dataset; keeping all rows.")
+            else:
+                df = filtered
+        else:
+            st.info("Dataset has no subreddit labels; showing all rows.")
 
-    st.success(f"Prepared {len(df):,} comments")
-    st.write(df.head())
+    # Optional: drop obvious AutoModerator / boilerplate comments
+    automod_hints = ("i am a bot", "performed automatically", "contact the moderators")
+    mask = ~df["text"].astype(str).str.lower().str.contains("|".join(automod_hints))
+    df = df[mask]
 
-    # Humour probabilities (HF or heuristic)
-    with st.spinner("Scoring humour…"):
+    # Clean text for modeling/plots
+    df["text_clean"] = clean_text_series(df["text"])
+
+    st.caption("Preview of normalized input")
+    st.dataframe(df.head(), width="stretch")
+
+    # Score humour
+    with st.spinner("Scoring humour..."):
         df["humor_prob"] = try_hf_humor_probs(df["text_clean"].tolist())
         df["humor_label"] = (df["humor_prob"] >= 0.5).astype(int)
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.plotly_chart(humour_mix_plot(df), use_container_width=True)
-
-    with col2:
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.plotly_chart(humour_mix_plot(df), width="stretch", config=CFG, theme=None)
+    with c2:
         st.subheader("Humour share by community")
         pies = (
             df.groupby("subreddit")["humor_label"]
@@ -371,14 +316,16 @@ if run:
                     pies,
                     names="subreddit",
                     values="humor_share",
-                    title="Share of comments likely humorous (mean probability ≥ 0.5)",
+                    title="Share of comments likely humorous (≥ 0.5)",
                 ),
-                use_container_width=True,
+                width="stretch",
+                config=CFG,
+                theme=None,
             )
         else:
             st.info("No humour labels available to plot yet.")
 
-    # Optional: stacked bar counts
+    # Counts stacked bar
     st.subheader("Humorous vs non-humorous counts by community")
     counts = (
         df.assign(label=df["humor_label"].map({1: "humorous", 0: "not humorous"}))
@@ -389,25 +336,28 @@ if run:
     if len(counts):
         st.plotly_chart(
             px.bar(counts, x="subreddit", y="n", color="label", barmode="stack"),
-            use_container_width=True,
+            width="stretch",
+            config=CFG,
+            theme=None,
         )
 
-    # Templates / frequent phrases
+    # Topic templates / phrases
     st.subheader("Template clusters / frequent phrases")
     info = safe_bertopic(df["text_clean"].tolist())
-    st.dataframe(info.head(20), use_container_width=True)
+    st.dataframe(info.head(20), width="stretch")
 
-    # Entities (if available)
+    # Entities (shared helper; returns empty if spaCy unavailable)
     st.subheader("In-group entities")
-    ents = safe_entities(df["text"].tolist())
+    ents = extract_entities(df["text"].tolist()[:1500])
     if not ents.empty:
-        st.dataframe(ents.head(30), use_container_width=True)
+        st.dataframe(ents.head(30), width="stretch")
     else:
-        st.write("No entities extracted in demo sample.")
+        st.write("No entities extracted (or NER unavailable).")
 
-    # Compare communities (robust, no duplicate column names)
+    # ---------------- Compare communities ----------------
     st.subheader("Compare communities")
-    uniq = sorted(df["subreddit"].unique().tolist())
+    uniq = sorted(df["subreddit"].astype(str).unique().tolist())
+
     if len(uniq) >= 2:
         colA, colB = st.columns(2)
         with colA:
@@ -415,37 +365,32 @@ if run:
         with colB:
             b = st.selectbox("Community B", uniq, index=1)
 
-        def profile_block(name: str):
-            subdf = df[df["subreddit"] == name]
+        cc1, cc2 = st.columns(2)
+
+        def profile_block(data: pd.DataFrame, name: str) -> None:
+            subdf = data[data["subreddit"] == name]
             st.markdown(f"#### r/{name}")
             st.metric("Avg humour prob", f"{subdf['humor_prob'].mean():.2f}")
             st.metric("Comments analysed", f"{len(subdf):,}")
 
-            vc = subdf["text_clean"].astype(str).str.split().explode().value_counts().head(10)
-            top_terms = vc.reset_index()
-            cols = list(top_terms.columns)
-            rename_map = {}
-            if "index" in cols:
-                rename_map["index"] = "token"
-            if "text_clean" in cols:
-                rename_map["text_clean"] = "token"
-            if "count" in cols:
-                rename_map["count"] = "freq"
-            if 0 in top_terms.columns:
-                rename_map[0] = "freq"
-            top_terms = top_terms.rename(columns=rename_map)
-            # Ensure final schema is ['token','freq'] with unique names
-            if "token" in top_terms.columns and "freq" in top_terms.columns:
-                top_terms = top_terms[["token", "freq"]]
-            else:
-                top_terms.columns = ["token", "freq"]
-            st.dataframe(top_terms, use_container_width=True)
+            tokens = (
+                subdf["text_clean"]
+                .astype(str)
+                .map(tokenize_meaningful)
+                .explode()
+                .value_counts()
+                .head(15)
+                .reset_index()
+                .rename(columns={"index": "token", 0: "freq"})
+            )
+            if not {"token", "freq"}.issubset(tokens.columns):
+                tokens.columns = ["token", "freq"]
+            st.dataframe(tokens, width="stretch")
 
-        c1, c2 = st.columns(2)
-        with c1:
-            profile_block(a)
-        with c2:
-            profile_block(b)
+        with cc1:
+            profile_block(df, a)
+        with cc2:
+            profile_block(df, b)
     else:
         st.info("Need at least two subreddits to compare.")
 
@@ -453,14 +398,15 @@ if run:
     st.subheader("Export")
     export_dir = Path("data/exports")
     export_dir.mkdir(parents=True, exist_ok=True)
-    export_name = f"humourscope_{'_'.join(uniq)}.csv" if uniq else "humourscope_demo.csv"
+    export_name = f"humourscope_{'_'.join(uniq) if uniq else 'all'}.csv"
     path = export_dir / export_name
     df.to_csv(path, index=False)
     st.download_button(
-        "Download CSV", data=path.read_bytes(), file_name=export_name, mime="text/csv"
+        "Download CSV",
+        data=path.read_bytes(),
+        file_name=export_name,
+        mime="text/csv",
     )
 
 else:
-    st.info(
-        "Set inputs and click **Fetch & Analyse**. Demo Mode is ON by default (no API required)."
-    )
+    st.info("Choose a data source, then click **Fetch & Analyse**.")

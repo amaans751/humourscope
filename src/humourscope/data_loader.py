@@ -56,19 +56,19 @@ def load_hf_sample(
     split: str = "train",
     n: int = 5000,
 ) -> pd.DataFrame:
-    """
-    Load a public HF dataset and normalize to the app schema.
-
-    Requires: pip install datasets
-    """
-    from datasets import load_dataset  # lazy import inside function
+    from datasets import load_dataset
 
     ds = load_dataset(dataset, split=split)
     df = pd.DataFrame(ds.select(range(min(n, len(ds)))))
     df = _normalize_cols(df)
+
+    # Ensure we have a subreddit; many HF joke sets lack it
+    if "subreddit" not in df.columns or df["subreddit"].fillna("").eq("").all():
+        df["subreddit"] = "rJokes"  # <-- add this line
     # If comment_id missing, fallback to post_id
-    if "comment_id" not in df or (df["comment_id"] == "").all():
+    if "comment_id" not in df or df["comment_id"].fillna("").eq("").all():
         df["comment_id"] = df["post_id"].astype(str)
+
     return df
 
 

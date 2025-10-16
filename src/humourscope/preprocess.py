@@ -5,18 +5,28 @@ import pandas as pd
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 URL_RE = re.compile(r"https?://\S+")
-USER_RE = re.compile(r"u/\w+")
-SUB_RE = re.compile(r"r/\w+")
+USER_RE = re.compile(r"\bu/\w+")
+SUB_RE = re.compile(r"\br/\w+")
 WS_RE = re.compile(r"\s+")
+
+# AutoModerator / boilerplate fragments:
+BOILER_RE = re.compile(
+    r"(i am a bot|action (?:was )?performed automatically|"
+    r"contact (?:the )?moderators(?: of this subreddit)?|"
+    r"message (?:the )?moderators|"
+    r"www\.reddit\.com|reddit\.com|wiki|rules)",
+    re.I,
+)
 
 
 def clean_text(s: str) -> str:
     s = s or ""
-    s = s.lower()
     s = URL_RE.sub(" ", s)
+    s = BOILER_RE.sub(" ", s)  # strip automod boilerplate & domain crumbs
     s = USER_RE.sub(" ", s)
     s = SUB_RE.sub(" ", s)
-    s = re.sub(r"[^\w\s'!?.,;:()\-]", " ", s)
+    s = s.lower()
+    s = re.sub(r"[^\w\s!?.,;:()\-']", " ", s)
     s = WS_RE.sub(" ", s).strip()
     return s
 
